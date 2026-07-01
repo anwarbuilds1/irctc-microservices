@@ -1,0 +1,22 @@
+{
+  "name": "irctc-microservices",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "gateway",
+    "services/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "echo \"Run individual services\"",
+    "build": "npm run build --workspaces",
+    "test": "npm run test --workspaces",
+    "lint": "npm run lint --workspaces"
+  },
+  "engines": {
+    "node": ">=20 <23"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2"
+  }
+}
