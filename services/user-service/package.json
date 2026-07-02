@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "module": "CommonJS",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "prisma generate && tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "test": "echo \"No tests yet\""
