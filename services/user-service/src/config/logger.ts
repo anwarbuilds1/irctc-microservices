@@ -1,9 +1,12 @@
 import pino from "pino";
 
 const logger = pino({
-  level: process.env.LOG_LEVEL || "info",
+  base: {
+    service: "user-service",
+    environment: process.env.NODE_ENV,
+  },
   transport:
-    process.env.NODE_ENV !== "production"
+    process.env.NODE_ENV === "development"
       ? {
           target: "pino-pretty",
         }
