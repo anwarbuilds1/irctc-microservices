@@ -56,6 +56,7 @@ export default function errorHandler(
       message: "Invalid token",
     });
   }
+
   if (err.name === "TokenExpiredError") {
     return res.status(401).json({
       success: false,
@@ -71,4 +72,3 @@ export default function errorHandler(
     message: "Internal Server Error",
   });
 }
-
