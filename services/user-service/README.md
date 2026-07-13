@@ -6,30 +6,23 @@ The **User Service** is responsible for managing users in the IRCTC Microservice
 
 # Responsibilities
 
-- User Registration
-- User Authentication (Upcoming)
-- User Profile Management (Upcoming)
-- JWT Token Management (Upcoming)
-- Role-Based Access Control (RBAC) (Upcoming)
-- Publish User Events (Upcoming)
-
 ---
 
 # Tech Stack
 
-| Technology     | Purpose                       |
-| -------------- | ----------------------------- |
-| Node.js        | Runtime                       |
-| TypeScript     | Programming Language          |
-| Express.js     | REST API Framework            |
-| Docker         | Containerization              |
-| Docker Compose | Local Development             |
-| PostgreSQL     | Primary Database _(Upcoming)_ |
-| Prisma         | ORM _(Upcoming)_              |
-| Redis          | Caching _(Upcoming)_          |
-| RabbitMQ       | Event Messaging _(Upcoming)_  |
-| Zod            | Request Validation            |
-| Pino           | Structured Logging            |
+| Technology     | Purpose              |
+| -------------- | -------------------- |
+| Node.js        | Runtime              |
+| TypeScript     | Programming Language |
+| Express.js     | REST API Framework   |
+| Docker         | Containerization     |
+| Docker Compose | Local Development    |
+| PostgreSQL     | Primary Database     |
+| Prisma         | ORM                  |
+| Redis          | Caching              |
+| RabbitMQ       | Event Messaging      |
+| Zod            | Request Validation   |
+| Pino           | Structured Logging   |
 
 ---
 
@@ -42,18 +35,12 @@ user-service/
 │   ├── config/
 │   ├── controllers/
 │   ├── services/
-│   ├── repositories/
 │   ├── routes/
+│   ├── repository/
 │   ├── middlewares/
-│   ├── validators/
 │   ├── utils/
-│   ├── exceptions/
-│   ├── clients/
-│   ├── app.ts
 │   └── index.ts
 │
-├── prisma/
-├── tests/
 ├── Dockerfile
 ├── Dockerfile.dev
 ├── package.json
@@ -310,30 +297,9 @@ docker compose down
 
 # Current Status
 
-- ✅ Express Server
-- ✅ TypeScript
-- ✅ Docker
-- ✅ Docker Compose
-- ✅ Layered Architecture
-- ✅ Health Endpoint
-- ✅ Pino Logger
-- ✅ Error Handling
-
 ---
 
 # Upcoming Features
-
-- PostgreSQL Integration
-- Prisma ORM
-- User Registration
-- User Login
-- JWT Authentication
-- Refresh Tokens
-- RBAC
-- Redis Caching
-- RabbitMQ Events
-- Unit Testing
-- Integration Testing
 
 ---
 
