@@ -11,6 +11,7 @@ const envSchema = z.object({
   REDIS_URL: z.string().optional(),
   RABBITMQ_URL: z.string().optional(),
   ALLOWED_ORIGINS: z.string().default('*'),
+  SERVICE_NAME: z.string().default('user-service'),
 });
 
 const parsedEnv = envSchema.safeParse(process.env);
