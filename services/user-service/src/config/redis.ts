@@ -79,8 +79,17 @@ export class RedisService {
    */
   public async disconnect(): Promise<void> {
     if (this.client) {
-      await this.client.quit();
-      logger.info('Redis client disconnected gracefully.');
+      const status = this.client.status;
+      if (status !== 'end' && status !== 'close') {
+        try {
+          await this.client.quit();
+          logger.info('Redis client disconnected gracefully.');
+        } catch (err) {
+          logger.error(err, 'Failed to close Redis connection gracefully');
+        }
+      } else {
+        logger.info(`Redis client connection is already in '${status}' state.`);
+      }
     }
   }
 }
