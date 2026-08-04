@@ -1,5 +1,7 @@
 import { env } from './env';
 import { logger } from './logger';
+import { redis } from './redis';
+import { prisma } from './prisma';
 
 export const config = {
   PORT: env.PORT,
@@ -12,4 +14,5 @@ export const config = {
   SERVICE_NAME: env.SERVICE_NAME,
 };
 
-export { logger };
+export { logger, redis, prisma };
+

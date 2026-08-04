@@ -1,6 +1,6 @@
 import express from 'express';
 import helmet from 'helmet';
-import { config, logger } from './config';
+import { config, logger, redis, prisma } from './config';
 import healthRouter from './routes/health.route';
 import { corsMiddleware } from './middlewares/cors.middleware';
 import { requestLoggerMiddleware } from './middlewares/request.middleware';
@@ -38,7 +38,18 @@ const server = app.listen(config.PORT, () => {
 // Graceful shutdown
 const shutdown = () => {
     logger.info('Shutting down gracefully...');
-    server.close(() => {
+    server.close(async () => {
+        try {
+            const { RedisService } = await import('./config/redis');
+            const { PrismaService } = await import('./config/prisma');
+
+            await Promise.all([
+                RedisService.getInstance().disconnect(),
+                PrismaService.getInstance().disconnect()
+            ]);
+        } catch (err) {
+            logger.error(err, 'Error during database/cache disconnection');
+        }
         logger.info('Closed out remaining connections.');
         process.exit(0);
     });
