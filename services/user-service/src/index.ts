@@ -1,32 +1,5 @@
-import express from 'express';
-import helmet from 'helmet';
-import { config, logger, redis, prisma } from './config';
-import healthRouter from './routes/health.route';
-import { corsMiddleware } from './middlewares/cors.middleware';
-import { requestLoggerMiddleware } from './middlewares/request.middleware';
-import { notFoundMiddleware } from './middlewares/not-found.middleware';
-import { errorMiddleware } from './middlewares/error.middleware';
-
-const app = express();
-
-// Security Middlewares
-app.use(helmet());
-app.use(corsMiddleware);
-
-// Body Parsers
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// HTTP Request Logging
-app.use(requestLoggerMiddleware);
-
-// Route handlers
-app.use('/', healthRouter);
-app.use('/api/v1', healthRouter);
-
-// Fallback handlers
-app.use(notFoundMiddleware);
-app.use(errorMiddleware);
+import { app } from './app';
+import { config, logger } from './config';
 
 // Start server
 const server = app.listen(config.PORT, () => {

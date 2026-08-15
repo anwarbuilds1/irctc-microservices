@@ -12,6 +12,8 @@ const envSchema = z.object({
   RABBITMQ_URL: z.string().optional(),
   ALLOWED_ORIGINS: z.string().default('*'),
   SERVICE_NAME: z.string().default('user-service'),
+  RESEND_API_KEY: z.string().optional().default('re_mock_key'),
+  RESEND_FROM_EMAIL: z.string().default('onboarding@resend.dev'),
 });
 
 const parsedEnv = envSchema.safeParse(process.env);
