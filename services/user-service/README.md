@@ -32,7 +32,118 @@ The **User Service** is the foundational identity and access management (IAM) mi
 
 ---
 
-## 3. Project Structure
+## 3. Architecture & Workflows
+
+### 3.1 Layered Architecture & Data Flow
+
+```mermaid
+flowchart TD
+    Client["Client / Frontend"]
+    
+    subgraph ExpressApp ["Express Application (src/app.ts)"]
+        Router["Router Layer (src/routes/)"]
+        Validate["Validation Middleware (Zod)"]
+        AuthGuard["Auth Guard Middleware"]
+        Controller["Controllers (src/controllers/)"]
+        Service["Services (src/services/)"]
+        Repo["Repositories (src/repository/)"]
+    end
+    
+    subgraph DataStore ["Data & Cache Layer"]
+        Postgres[("PostgreSQL (Users Table)")]
+        Redis[("Redis (OTPs, Sessions)")]
+        Resend["Resend API (Mock/SMTP)"]
+    end
+
+    Client -->|HTTP Request| Router
+    Router -->|1. Parse Inputs| Validate
+    Validate -->|2. Check AccessToken| AuthGuard
+    AuthGuard -->|3. Route Request| Controller
+    Controller -->|4. Business Logic| Service
+    Service -->|5. Query Cache| Redis
+    Service -->|6. CRUD ops| Repo
+    Service -->|7. Email Dispatch| Resend
+    Repo -->|8. Fetch/Store| Postgres
+```
+
+### 3.2 User Signup & OTP Verification Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client
+    participant API as User Service API
+    participant Cache as Redis
+    participant DB as PostgreSQL
+    participant Email as Resend Service
+
+    %% Signup Flow
+    Note over Client, Email: Signup Flow
+    Client->>API: POST /api/v1/auth/signup {name, email, password, phone}
+    API->>DB: Check if email/phone exists
+    DB-->>API: No duplicate found
+    API->>DB: Create user (emailVerified = false)
+    API->>API: Generate 6-digit OTP
+    API->>API: Hash OTP (SHA-256)
+    API->>Cache: Save hashed OTP (TTL 5m)
+    API->>Email: Send plaintext OTP
+    Email-->>Client: Receive OTP Email
+    API-->>Client: 201 Created (Prompt OTP Verification)
+
+    %% Verification Flow
+    Note over Client, Email: OTP Verification Flow
+    Client->>API: POST /api/v1/auth/verify-otp {email, otp}
+    API->>Cache: Get hashed OTP & increment attempts counter
+    alt Verification fails or attempts > 5
+        API->>Cache: (If attempts > 5) Delete OTP
+        API-->>Client: 400 Bad Request
+    else Verification succeeds
+        API->>API: Timing-safe match check
+        API->>Cache: Delete OTP and attempts keys
+        API->>DB: Update user (emailVerified = true)
+        API-->>Client: 200 OK (Verification Successful)
+    end
+```
+
+### 3.3 User Login & Token Rotation Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client
+    participant API as User Service API
+    participant Cache as Redis
+    participant DB as PostgreSQL
+
+    %% Login Flow
+    Note over Client, DB: Login Flow
+    Client->>API: POST /api/v1/auth/login {email, password}
+    API->>DB: Retrieve verified user record
+    DB-->>API: User details & password hash
+    API->>API: Compare bcrypt password hash
+    API->>API: Generate Session ID (UUID)
+    API->>Cache: Store session payload (TTL 7 days)
+    API->>API: Sign JWT Access Token (15m expiry)
+    API->>API: Sign JWT Refresh Token (7d expiry)
+    API-->>Client: 200 OK (Body: AccessToken, Cookie: httpOnly RefreshToken)
+
+    %% Token Refresh Rotation Flow
+    Note over Client, DB: Token Refresh Rotation Flow
+    Client->>API: POST /api/v1/auth/refresh (Cookie: Old RefreshToken)
+    API->>API: Verify Refresh Token signature & extract Session ID
+    API->>Cache: Fetch & extend Session ID TTL (7 days)
+    alt Session not found (expired / logged out)
+        API-->>Client: 401 Unauthorized (Log in again)
+    else Session active
+        API->>API: Generate new Access Token
+        API->>API: Generate new rotated Refresh Token
+        API-->>Client: 200 OK (Body: New AccessToken, Cookie: New httpOnly RefreshToken)
+    end
+```
+
+---
+
+## 4. Project Structure
 
 ```text
 services/user-service/
@@ -59,7 +170,7 @@ services/user-service/
 
 ---
 
-## 4. API Endpoints
+## 5. API Endpoints
 
 All endpoints are prefixed with `/api/v1` except for the root-level Swagger docs.
 
@@ -73,17 +184,17 @@ All endpoints are prefixed with `/api/v1` except for the root-level Swagger docs
 | **POST** | `/login` | None | `{ email, password }` | Authenticates verified user, creates Redis session, returns JWT Access Token, and sets secure `httpOnly` `refreshToken` cookie. |
 | **POST** | `/logout` | Bearer `<accessToken>` | None | Deletes active session from Redis and clears client cookie. |
 | **POST** | `/refresh` | `refreshToken` cookie | `{ refreshToken }` *(optional)* | Issues a new Access Token and a brand new rotated Refresh Token. |
+| **GET** | `/docs` | None | None | Interactive Swagger UI API Documentation. |
 
 ### Utility Endpoints
 
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
-| **GET** | `/docs` | Renders interactive Swagger UI API Documentation. |
 | **GET** | `/api/v1/health` | Renders API & service health details. |
 
 ---
 
-## 5. Security & Lockout Policies
+## 6. Security & Lockout Policies
 
 1. **OTP Cryptography**: Plain OTPs are never logged or stored. They are hashed using SHA-256 before being stored in Redis.
 2. **Timing-Safe Equal Verification**: OTP comparisons are protected against side-channel timing attacks using `crypto.timingSafeEqual`.
@@ -92,7 +203,7 @@ All endpoints are prefixed with `/api/v1` except for the root-level Swagger docs
 
 ---
 
-## 6. How to Run Locally
+## 7. How to Run Locally
 
 ### Environment Variables
 Configure these in `services/user-service/.env`:
