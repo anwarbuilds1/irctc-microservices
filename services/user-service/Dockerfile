@@ -6,7 +6,7 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install all dependencies (including devDependencies for tsc)
+# Install all dependencies (including devDependencies for TypeScript compilation)
 RUN npm install
 
 # Copy source code and Prisma configuration
@@ -36,11 +36,9 @@ COPY prisma ./prisma/
 # Install production dependencies only
 RUN npm install --omit=dev
 
-# Set dummy DATABASE_URL for build-time Prisma Client generation in production stage
-ENV DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy"
-
-# Generate production Prisma Client
-RUN npx prisma generate
+# Copy generated Prisma Client from builder stage
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder /app/node_modules/@prisma/client ./node_modules/@prisma/client
 
 # Copy built application code from builder stage
 COPY --from=builder /app/dist ./dist

@@ -1,4 +1,5 @@
 version: '3.8'
+name: irctc-microservices
 
 services:
   # ==========================================
@@ -17,7 +18,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-user_db}"]
+      test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-user_db}" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -33,31 +34,65 @@ services:
       - irctc-network
 
   # ==========================================
-  # Cache Service (Redis)
+  # Database Management GUI (pgAdmin)
+  # ==========================================
+  pgadmin:
+    image: dpage/pgadmin4:8.9
+    container_name: irctc-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@irctc.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-adminpassword}
+      PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION: "True"
+      PGADMIN_CONFIG_CONSOLE_LOG_LEVEL: "30"
+    ports:
+      - "127.0.0.1:${PGADMIN_PORT:-5050}:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./infrastructure/pgadmin/servers.json:/pgadmin4/servers.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+        reservations:
+          memory: 256M
+    networks:
+      - irctc-network
+
+  # ==========================================
+  # Cache Service (Redis & RedisInsight)
   # ==========================================
   redis:
-    image: redis:7.2-alpine
+    image: redis/redis-stack:6.2.6-v19
     container_name: irctc-redis
     restart: unless-stopped
-    command: redis-server --requirepass ${REDIS_PASSWORD:-secure_redis_password} --appendonly yes
+    environment:
+      REDIS_ARGS: "--requirepass ${REDIS_PASSWORD:-secure_redis_password} --appendonly yes"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-secure_redis_password}
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDISINSIGHT_PORT:-8001}:8001"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a $${REDIS_PASSWORD:-secure_redis_password} ping | grep -q PONG"]
+      test: [ "CMD-SHELL", "redis-cli -a $${REDIS_PASSWORD:-secure_redis_password} ping | grep -q PONG" ]
       interval: 10s
       timeout: 5s
       retries: 5
     deploy:
       resources:
         limits:
-          cpus: '0.25'
-          memory: 256M
+          cpus: '0.50'
+          memory: 512M
         reservations:
-          memory: 128M
+          memory: 256M
     networks:
       - irctc-network
+
 
   # ==========================================
   # Message Broker Service (RabbitMQ)
@@ -75,7 +110,7 @@ services:
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      test: [ "CMD", "rabbitmq-diagnostics", "-q", "ping" ]
       interval: 15s
       timeout: 15s
       retries: 5
@@ -142,4 +177,6 @@ volumes:
   redis_data:
     driver: local
   rabbitmq_data:
+    driver: local
+  pgadmin_data:
     driver: local

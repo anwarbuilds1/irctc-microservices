@@ -1,0 +1,14 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "IRCTC User Database",
+      "Group": "IRCTC Microservices",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "user_db",
+      "Username": "postgres",
+      "SSLMode": "prefer",
+      "SavePassword": true
+    }
+  }
+}
