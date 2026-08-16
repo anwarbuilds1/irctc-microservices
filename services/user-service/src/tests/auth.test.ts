@@ -155,27 +155,44 @@ describe('Authentication Flow Integration Tests', () => {
       expect(response.body.message).toBe('OTP has expired or is invalid');
     });
 
-    it('should lock out after too many invalid OTP attempts', async () => {
+    it('should enforce a 1-minute cooldown between verification attempts', async () => {
       await request(app).post('/api/v1/auth/signup').send(mockUser);
 
-      // Send 6 invalid OTP attempts
+      // 1. First failed attempt
+      const res1 = await request(app)
+        .post('/api/v1/auth/verify-otp')
+        .send({ email: mockUser.email, otp: '111111' });
+      expect(res1.status).toBe(400);
+      expect(res1.body.message).toBe('OTP has expired or is invalid');
+
+      // 2. Second attempt immediately should hit the 1-minute cooldown lockout
+      const res2 = await request(app)
+        .post('/api/v1/auth/verify-otp')
+        .send({ email: mockUser.email, otp: '111111' });
+      expect(res2.status).toBe(400);
+      expect(res2.body.message).toContain('Please wait 1 minute');
+    });
+
+    it('should lock out after 5 verification attempts in 1 hour', async () => {
+      await request(app).post('/api/v1/auth/signup').send(mockUser);
+
+      // Send 5 invalid OTP attempts, manually deleting the 1-minute cooldown in Redis each time
       for (let i = 0; i < 5; i++) {
-        await request(app)
+        const res = await request(app)
           .post('/api/v1/auth/verify-otp')
           .send({ email: mockUser.email, otp: '111111' });
+        expect(res.status).toBe(400);
+        // Clean the 1-minute verification cooldown key so we can try again
+        await redis.del(`auth:otp:verify-cooldown:${mockUser.email}`);
       }
 
-      // 6th attempt should return rate/attempt limit error and delete OTP
+      // 6th attempt should block with "Too many OTP verification attempts"
       const response = await request(app)
         .post('/api/v1/auth/verify-otp')
         .send({ email: mockUser.email, otp: '111111' });
 
       expect(response.status).toBe(400);
-      expect(response.body.message).toContain('Too many invalid attempts');
-
-      // Verify OTP was deleted from Redis
-      const storedHashedOtp = await redis.get(`auth:otp:signup:${mockUser.email}`);
-      expect(storedHashedOtp).toBeNull();
+      expect(response.body.message).toContain('Too many OTP verification attempts');
     });
   });
 

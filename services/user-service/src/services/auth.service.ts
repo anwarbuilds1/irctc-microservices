@@ -4,11 +4,11 @@ import { redis } from '../config/redis';
 import { EmailService } from './email.service';
 import { hashPassword, comparePassword } from '../utils/password';
 import { generateAccessToken, generateRefreshToken, verifyToken, RefreshTokenPayload } from '../utils/jwt';
-import { 
-  ConflictError, 
-  BadRequestError, 
-  NotFoundError, 
-  UnauthorizedError 
+import {
+  ConflictError,
+  BadRequestError,
+  NotFoundError,
+  UnauthorizedError
 } from '../utils/errors';
 import { logger } from '../config/logger';
 
@@ -20,6 +20,8 @@ export class AuthService {
   private readonly COOLDOWN_TTL = 60; // 1 minute
   private readonly SESSION_TTL = 604800; // 7 days (matches refresh token lifespan)
   private readonly MAX_OTP_ATTEMPTS = 5;
+  private readonly HOURLY_LIMIT_TTL = 3600; // 1 hour
+  private readonly VERIFY_COOLDOWN_TTL = 60; // 1 minute
 
   /**
    * Helper to generate a secure 6-digit OTP, store its SHA-256 hash in Redis, 
@@ -28,7 +30,7 @@ export class AuthService {
   private async generateAndSendOtp(email: string): Promise<void> {
     const cooldownKey = `auth:otp:cooldown:${email}`;
     const otpKey = `auth:otp:signup:${email}`;
-    const attemptsKey = `auth:otp:attempts:${email}`;
+    const verifyCooldownKey = `auth:otp:verify-cooldown:${email}`;
 
     // 1. Cooldown Check (Rate Limiting)
     const onCooldown = await redis.exists(cooldownKey);
@@ -43,11 +45,10 @@ export class AuthService {
     const hashedOtp = crypto.createHash('sha256').update(otp).digest('hex');
 
     // 4. Save to Redis
-    // Set OTP and reset attempt counter
     await Promise.all([
       redis.set(otpKey, hashedOtp, 'EX', this.OTP_TTL),
       redis.set(cooldownKey, '1', 'EX', this.COOLDOWN_TTL),
-      redis.del(attemptsKey), // Reset attempts for the new OTP
+      redis.del(verifyCooldownKey), // Clear verification cooldown on new OTP request
     ]);
 
     // 5. Send OTP via EmailService (never log or return in response)
@@ -97,7 +98,8 @@ export class AuthService {
    */
   public async verifyOtp(email: string, otp: string): Promise<{ message: string }> {
     const otpKey = `auth:otp:signup:${email}`;
-    const attemptsKey = `auth:otp:attempts:${email}`;
+    const hourlyAttemptsKey = `auth:otp:hourly-attempts:${email}`;
+    const verifyCooldownKey = `auth:otp:verify-cooldown:${email}`;
 
     // 1. Find user
     const user = await this.userRepository.findByEmail(email);
@@ -109,23 +111,27 @@ export class AuthService {
       throw new BadRequestError('Email is already verified');
     }
 
-    // 2. Retrieve hashed OTP
+    // 2. Cooldown Check: Must wait 1 minute between attempts
+    const onVerifyCooldown = await redis.exists(verifyCooldownKey);
+    if (onVerifyCooldown) {
+      throw new BadRequestError('Please wait 1 minute before attempting verification again');
+    }
+
+    // 3. Hourly limit check: Max 5 attempts in 1 hour
+    const hourlyAttemptsStr = await redis.get(hourlyAttemptsKey);
+    const hourlyAttempts = hourlyAttemptsStr ? parseInt(hourlyAttemptsStr, 10) : 0;
+    if (hourlyAttempts >= this.MAX_OTP_ATTEMPTS) {
+      throw new BadRequestError('Too many OTP verification attempts. Please try again after 1 hour.');
+    }
+
+    // 4. Retrieve hashed OTP
     const storedHashedOtp = await redis.get(otpKey);
     if (!storedHashedOtp) {
+      await this.handleFailedVerificationAttempt(email, hourlyAttemptsKey, verifyCooldownKey);
       throw new BadRequestError('OTP has expired or is invalid');
     }
 
-    // 3. Verify attempt limit
-    const attempts = await redis.incr(attemptsKey);
-    if (attempts > this.MAX_OTP_ATTEMPTS) {
-      await Promise.all([
-        redis.del(otpKey),
-        redis.del(attemptsKey),
-      ]);
-      throw new BadRequestError('Too many invalid attempts. Please request a new OTP.');
-    }
-
-    // 4. Hash input OTP & compare securely using timingSafeEqual
+    // 5. Hash input OTP & compare securely using timingSafeEqual
     const incomingHashed = crypto.createHash('sha256').update(otp).digest('hex');
     const buffer1 = Buffer.from(incomingHashed, 'hex');
     const buffer2 = Buffer.from(storedHashedOtp, 'hex');
@@ -133,13 +139,15 @@ export class AuthService {
     const isValid = buffer1.length === buffer2.length && crypto.timingSafeEqual(buffer1, buffer2);
 
     if (!isValid) {
+      await this.handleFailedVerificationAttempt(email, hourlyAttemptsKey, verifyCooldownKey);
       throw new BadRequestError('OTP has expired or is invalid');
     }
 
-    // 5. Success cleanup and user verification
+    // 6. Success cleanup and user verification
     await Promise.all([
       redis.del(otpKey),
-      redis.del(attemptsKey),
+      redis.del(hourlyAttemptsKey),
+      redis.del(verifyCooldownKey),
       redis.del(`auth:otp:cooldown:${email}`),
     ]);
 
@@ -151,6 +159,22 @@ export class AuthService {
     return {
       message: 'Email verified successfully. You can now log in.',
     };
+  }
+
+  /**
+   * Helper to handle failed OTP verification attempts:
+   * Increments the hourly counter and sets a 1-minute cooldown.
+   */
+  private async handleFailedVerificationAttempt(
+    email: string,
+    hourlyAttemptsKey: string,
+    verifyCooldownKey: string
+  ): Promise<void> {
+    const attempts = await redis.incr(hourlyAttemptsKey);
+    if (attempts === 1) {
+      await redis.expire(hourlyAttemptsKey, this.HOURLY_LIMIT_TTL);
+    }
+    await redis.set(verifyCooldownKey, '1', 'EX', this.VERIFY_COOLDOWN_TTL);
   }
 
   /**
