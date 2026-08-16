@@ -144,6 +144,8 @@ services:
       JWT_SECRET: ${JWT_SECRET:-your-secret-key-for-irctc-user-service}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:3001}
       SERVICE_NAME: user-service
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL}
     command: sh -c "npx prisma db push --accept-data-loss && npm start"
     depends_on:
       postgres:
