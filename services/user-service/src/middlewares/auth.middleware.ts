@@ -36,7 +36,7 @@ export const requireAuth: RequestHandler = async (req: Request, res: Response, n
     const decoded = verifyToken<AccessTokenPayload>(token);
 
     // Verify session is active in Redis
-    const sessionExists = await redis.exists(`auth:session:${decoded.sessionId}`);
+    const sessionExists = await redis.exists(`auth:session:${decoded.userId}:${decoded.sessionId}`);
     if (!sessionExists) {
       throw new UnauthorizedError('Session has expired or is invalid. Please log in again.');
     }

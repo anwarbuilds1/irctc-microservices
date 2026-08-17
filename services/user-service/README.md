@@ -8,7 +8,7 @@ The **User Service** is the foundational identity and access management (IAM) mi
 * **User Management**: Creating and managing user accounts with PostgreSQL (via Prisma).
 * **Secure Authentication**: Hashing passwords securely using `bcrypt` and validating credentials.
 * **OTP Verification**: Generating cryptographically secure OTPs, storing SHA-256 hashes in Redis, and emailing plain OTPs to users via the **Resend** API.
-* **Session Management**: Establishing Redis-backed sessions with sliding expirations to allow instant token revocation.
+* **Session & Device Management**: Establishing user-prefixed Redis-backed sessions with sliding expirations, automatic device identification via User-Agent strings, and capabilities to list and remotely revoke active sessions/devices.
 * **Refresh Token Rotation**: Enhancing security by issuing one-time-use refresh tokens that rotate on every renewal cycle.
 * **API Documentation**: Hosting interactive Swagger UI documentation at `/docs`.
 
@@ -117,12 +117,12 @@ sequenceDiagram
 
     %% Login Flow
     Note over Client, DB: Login Flow
-    Client->>API: POST /api/v1/auth/login {email, password}
+    Client->>API: POST /api/v1/auth/login {email, password, deviceName?} (Headers: User-Agent, X-Forwarded-For)
     API->>DB: Retrieve verified user record
     DB-->>API: User details & password hash
     API->>API: Compare bcrypt password hash
-    API->>API: Generate Session ID (UUID)
-    API->>Cache: Store session payload (TTL 7 days)
+    API->>API: Generate Session ID & Parse User-Agent
+    API->>Cache: Store session payload (IP, UA, deviceName, timestamps) in auth:session:userId:sessionId (TTL 7d)
     API->>API: Sign JWT Access Token (15m expiry)
     API->>API: Sign JWT Refresh Token (7d expiry)
     API-->>Client: 200 OK (Body: AccessToken, Cookie: httpOnly RefreshToken)
@@ -181,9 +181,11 @@ All endpoints are prefixed with `/api/v1` except for the root-level Swagger docs
 | **POST** | `/signup` | None | `{ name, email, password, phone }` | Registers a user, creates user record, hashes OTP, sets cooldown, and emails plain OTP. |
 | **POST** | `/verify-otp` | None | `{ email, otp }` | Verifies plain OTP against Redis hash. Deletes key on success. Sets `emailVerified: true` in Postgres. |
 | **POST** | `/resend-otp` | None | `{ email }` | Discards current OTP and dispatches a new one (restricted to a 60-second cooldown). |
-| **POST** | `/login` | None | `{ email, password }` | Authenticates verified user, creates Redis session, returns JWT Access Token, and sets secure `httpOnly` `refreshToken` cookie. |
+| **POST** | `/login` | None | `{ email, password, deviceName? }` | Authenticates verified user, parses User-Agent/IP, creates Redis session, returns JWT Access Token, and sets secure `httpOnly` `refreshToken` cookie. |
 | **POST** | `/logout` | Bearer `<accessToken>` | None | Deletes active session from Redis and clears client cookie. |
-| **POST** | `/refresh` | `refreshToken` cookie | `{ refreshToken }` *(optional)* | Issues a new Access Token and a brand new rotated Refresh Token. |
+| **POST** | `/refresh` | `refreshToken` cookie | `{ refreshToken }` *(optional)* | Issues a new Access Token, updates session activity metadata, and generates a new rotated Refresh Token. |
+| **GET** | `/sessions` | Bearer `<accessToken>` | None | Lists all active sessions/devices for the logged-in user, identifying the current session. |
+| **DELETE** | `/sessions/:sessionId` | Bearer `<accessToken>` | None | Remotely invalidates (logs out) the specified session/device. |
 | **GET** | `/docs` | None | None | Interactive Swagger UI API Documentation. |
 
 ### Utility Endpoints
@@ -210,7 +212,7 @@ Configure these in `services/user-service/.env`:
 ```env
 PORT=3000
 NODE_ENV=development
-DATABASE_URL="postgresql://postgres:password@localhost:5432/user_db"
+DATABASE_URL="postgresql://postgres:secure_postgres_password_here@localhost:5433/user_db"
 REDIS_URL="redis://:secure_redis_password@localhost:6379"
 JWT_SECRET="your-jwt-secret-key"
 JWT_REFRESH_SECRET="your-jwt-refresh-secret-key"

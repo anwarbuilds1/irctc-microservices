@@ -11,6 +11,7 @@ import {
   UnauthorizedError
 } from '../utils/errors';
 import { logger } from '../config/logger';
+import { parseUserAgent } from '../utils/user-agent';
 
 export class AuthService {
   private userRepository = new UserRepository();
@@ -203,12 +204,15 @@ export class AuthService {
   /**
    * Logs in a verified user.
    */
-  public async login(data: any): Promise<{
+  public async login(
+    data: any,
+    clientInfo: { userAgent?: string; ipAddress: string }
+  ): Promise<{
     accessToken: string;
     refreshToken: string;
     user: { id: string; name: string; email: string; role: string };
   }> {
-    const { email, password } = data;
+    const { email, password, deviceName } = data;
 
     // 1. Find user (generic credentials error for security)
     const user = await this.userRepository.findByEmail(email);
@@ -229,11 +233,21 @@ export class AuthService {
 
     // 4. Establish Session in Redis
     const sessionId = crypto.randomUUID();
-    const sessionKey = `auth:session:${sessionId}`;
+    const sessionKey = `auth:session:${user.id}:${sessionId}`;
+    
+    // Parse UA to identify device
+    const parsedUa = parseUserAgent(clientInfo.userAgent);
+    const resolvedDeviceName = deviceName || parsedUa.formatted;
+
     const sessionData = JSON.stringify({
       userId: user.id,
       email: user.email,
       role: user.role,
+      userAgent: clientInfo.userAgent || 'Unknown',
+      ipAddress: clientInfo.ipAddress,
+      deviceName: resolvedDeviceName,
+      createdAt: new Date().toISOString(),
+      lastActiveAt: new Date().toISOString(),
     });
 
     await redis.set(sessionKey, sessionData, 'EX', this.SESSION_TTL);
@@ -266,8 +280,8 @@ export class AuthService {
   /**
    * Logs out an authenticated user by deleting their session from Redis.
    */
-  public async logout(sessionId: string): Promise<{ message: string }> {
-    await redis.del(`auth:session:${sessionId}`);
+  public async logout(userId: string, sessionId: string): Promise<{ message: string }> {
+    await redis.del(`auth:session:${userId}:${sessionId}`);
     return {
       message: 'Logged out successfully.',
     };
@@ -276,12 +290,15 @@ export class AuthService {
   /**
    * Refreshes access token using a valid refresh token.
    */
-  public async refresh(token: string): Promise<{ accessToken: string; refreshToken: string }> {
+  public async refresh(
+    token: string,
+    clientInfo?: { userAgent?: string; ipAddress?: string }
+  ): Promise<{ accessToken: string; refreshToken: string }> {
     // 1. Verify Refresh Token JWT signature/expiration
     const decoded = verifyToken<RefreshTokenPayload>(token);
 
     // 2. Verify Session exists in Redis
-    const sessionKey = `auth:session:${decoded.sessionId}`;
+    const sessionKey = `auth:session:${decoded.userId}:${decoded.sessionId}`;
     const sessionDataStr = await redis.get(sessionKey);
     if (!sessionDataStr) {
       throw new UnauthorizedError('Session has expired or is invalid. Please log in again.');
@@ -289,8 +306,16 @@ export class AuthService {
 
     const sessionData = JSON.parse(sessionDataStr);
 
-    // 3. Keep the session alive (reset TTL)
-    await redis.expire(sessionKey, this.SESSION_TTL);
+    // 3. Keep the session alive (reset TTL and update IP/UA)
+    sessionData.lastActiveAt = new Date().toISOString();
+    if (clientInfo?.ipAddress) {
+      sessionData.ipAddress = clientInfo.ipAddress;
+    }
+    if (clientInfo?.userAgent) {
+      sessionData.userAgent = clientInfo.userAgent;
+    }
+
+    await redis.set(sessionKey, JSON.stringify(sessionData), 'EX', this.SESSION_TTL);
 
     // 4. Generate new Access and Refresh tokens
     const newAccessToken = generateAccessToken({
@@ -309,5 +334,67 @@ export class AuthService {
       accessToken: newAccessToken,
       refreshToken: newRefreshToken,
     };
+  }
+
+  /**
+   * Retrieves all active sessions (devices) for a user.
+   */
+  public async getActiveSessions(userId: string): Promise<any[]> {
+    const pattern = `auth:session:${userId}:*`;
+    
+    // Scan for all session keys of the user
+    let keys: string[] = [];
+    let cursor = '0';
+    
+    do {
+      const [newCursor, foundKeys] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+      cursor = newCursor;
+      keys = keys.concat(foundKeys);
+    } while (cursor !== '0');
+
+    if (keys.length === 0) {
+      return [];
+    }
+
+    // Retrieve all sessions
+    const sessionDataArray = await redis.mget(...keys);
+    
+    const sessions = sessionDataArray
+      .map((data, index) => {
+        if (!data) return null;
+        
+        try {
+          const session = JSON.parse(data);
+          const key = keys[index];
+          const parts = key.split(':');
+          const sessionId = parts[parts.length - 1];
+          
+          return {
+            sessionId,
+            deviceName: session.deviceName || 'Unknown Device',
+            ipAddress: session.ipAddress || 'Unknown IP',
+            createdAt: session.createdAt,
+            lastActiveAt: session.lastActiveAt,
+          };
+        } catch (e) {
+          return null;
+        }
+      })
+      .filter((s) => s !== null);
+
+    // Sort sessions by last active time descending (most recently active first)
+    return sessions.sort((a, b) => new Date(b.lastActiveAt).getTime() - new Date(a.lastActiveAt).getTime());
+  }
+
+  /**
+   * Revokes (deletes) a specific session/device for a user.
+   */
+  public async revokeSession(userId: string, targetSessionId: string): Promise<void> {
+    const sessionKey = `auth:session:${userId}:${targetSessionId}`;
+    const exists = await redis.exists(sessionKey);
+    if (!exists) {
+      throw new NotFoundError('Session not found or already expired');
+    }
+    await redis.del(sessionKey);
   }
 }

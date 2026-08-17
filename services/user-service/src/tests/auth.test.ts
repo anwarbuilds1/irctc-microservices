@@ -272,10 +272,12 @@ describe('Authentication Flow Integration Tests', () => {
       const tokenParts = response.body.data.accessToken.split('.');
       const payload = JSON.parse(Buffer.from(tokenParts[1], 'base64').toString());
       const sessionId = payload.sessionId;
+      const userId = payload.userId;
       expect(sessionId).toBeDefined();
+      expect(userId).toBeDefined();
 
       // Verify session exists in Redis
-      const sessionData = await redis.get(`auth:session:${sessionId}`);
+      const sessionData = await redis.get(`auth:session:${userId}:${sessionId}`);
       expect(sessionData).not.toBeNull();
       expect(JSON.parse(sessionData!)).toMatchObject({
         email: mockUser.email,
@@ -329,6 +331,7 @@ describe('Authentication Flow Integration Tests', () => {
       const tokenParts = accessToken.split('.');
       const payload = JSON.parse(Buffer.from(tokenParts[1], 'base64').toString());
       const sessionId = payload.sessionId;
+      const userId = payload.userId;
 
       // 2. Logout
       const response = await request(app)
@@ -340,7 +343,7 @@ describe('Authentication Flow Integration Tests', () => {
       expect(response.body.success).toBe(true);
 
       // Verify session is deleted from Redis
-      const sessionExists = await redis.exists(`auth:session:${sessionId}`);
+      const sessionExists = await redis.exists(`auth:session:${userId}:${sessionId}`);
       expect(sessionExists).toBe(0);
     });
   });
@@ -370,6 +373,139 @@ describe('Authentication Flow Integration Tests', () => {
       expect(response.body.data.accessToken).toBeDefined();
       expect(response.body.data.refreshToken).toBeDefined();
       expect(response.body.data.accessToken).not.toBe(loginRes.body.data.accessToken);
+    });
+  });
+
+  describe('Device Identification and Session Management', () => {
+    it('should store parsed user agent and custom device name during login', async () => {
+      // 1. Register & Verify
+      await request(app).post('/api/v1/auth/signup').send(mockUser);
+      const sentOtp = sendEmailSpy.mock.calls[0][1];
+      await request(app).post('/api/v1/auth/verify-otp').send({ email: mockUser.email, otp: sentOtp });
+
+      // 2. Login with user-agent and custom device name
+      const userAgent = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1';
+      const customDeviceName = 'My iPhone 14';
+
+      const loginRes = await request(app)
+        .post('/api/v1/auth/login')
+        .set('User-Agent', userAgent)
+        .send({
+          email: mockUser.email,
+          password: mockUser.password,
+          deviceName: customDeviceName,
+        });
+
+      expect(loginRes.status).toBe(200);
+      const accessToken = loginRes.body.data.accessToken;
+      const tokenParts = accessToken.split('.');
+      const payload = JSON.parse(Buffer.from(tokenParts[1], 'base64').toString());
+      const sessionId = payload.sessionId;
+      const userId = payload.userId;
+
+      // 3. Verify Redis session stores user-agent & custom deviceName
+      const sessionDataStr = await redis.get(`auth:session:${userId}:${sessionId}`);
+      expect(sessionDataStr).not.toBeNull();
+      const sessionData = JSON.parse(sessionDataStr!);
+      expect(sessionData.userAgent).toBe(userAgent);
+      expect(sessionData.deviceName).toBe(customDeviceName);
+    });
+
+    it('should fall back to parsed user agent if custom device name is not provided', async () => {
+      await request(app).post('/api/v1/auth/signup').send(mockUser);
+      const sentOtp = sendEmailSpy.mock.calls[0][1];
+      await request(app).post('/api/v1/auth/verify-otp').send({ email: mockUser.email, otp: sentOtp });
+
+      const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36';
+      
+      const loginRes = await request(app)
+        .post('/api/v1/auth/login')
+        .set('User-Agent', userAgent)
+        .send({
+          email: mockUser.email,
+          password: mockUser.password,
+        });
+
+      expect(loginRes.status).toBe(200);
+      const accessToken = loginRes.body.data.accessToken;
+      const tokenParts = accessToken.split('.');
+      const payload = JSON.parse(Buffer.from(tokenParts[1], 'base64').toString());
+      const sessionId = payload.sessionId;
+      const userId = payload.userId;
+
+      const sessionDataStr = await redis.get(`auth:session:${userId}:${sessionId}`);
+      const sessionData = JSON.parse(sessionDataStr!);
+      expect(sessionData.deviceName).toBe('Chrome on Windows');
+    });
+
+    it('should list all active sessions for the user and identify the current session', async () => {
+      await request(app).post('/api/v1/auth/signup').send(mockUser);
+      const sentOtp = sendEmailSpy.mock.calls[0][1];
+      await request(app).post('/api/v1/auth/verify-otp').send({ email: mockUser.email, otp: sentOtp });
+
+      // Login 1
+      const loginRes1 = await request(app)
+        .post('/api/v1/auth/login')
+        .set('User-Agent', 'Mozilla/5.0 (Linux; Android 10) Chrome/114.0.0.0')
+        .send({ email: mockUser.email, password: mockUser.password, deviceName: 'Android Phone' });
+
+      // Login 2
+      const loginRes2 = await request(app)
+        .post('/api/v1/auth/login')
+        .set('User-Agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15) Safari/16.5')
+        .send({ email: mockUser.email, password: mockUser.password, deviceName: 'MacBook' });
+
+      const accessToken2 = loginRes2.body.data.accessToken;
+
+      // Get active sessions
+      const sessionsRes = await request(app)
+        .get('/api/v1/auth/sessions')
+        .set('Authorization', `Bearer ${accessToken2}`);
+
+      expect(sessionsRes.status).toBe(200);
+      expect(sessionsRes.body.data).toHaveLength(2);
+
+      // Verify the list has the devices and current session marked correctly
+      const macSession = sessionsRes.body.data.find((s: any) => s.deviceName === 'MacBook');
+      const androidSession = sessionsRes.body.data.find((s: any) => s.deviceName === 'Android Phone');
+      
+      expect(macSession).toBeDefined();
+      expect(macSession.isCurrent).toBe(true);
+      
+      expect(androidSession).toBeDefined();
+      expect(androidSession.isCurrent).toBe(false);
+    });
+
+    it('should allow revoking a specific session', async () => {
+      await request(app).post('/api/v1/auth/signup').send(mockUser);
+      const sentOtp = sendEmailSpy.mock.calls[0][1];
+      await request(app).post('/api/v1/auth/verify-otp').send({ email: mockUser.email, otp: sentOtp });
+
+      // Login 1
+      const loginRes1 = await request(app)
+        .post('/api/v1/auth/login')
+        .send({ email: mockUser.email, password: mockUser.password, deviceName: 'Device A' });
+      const tokenParts1 = loginRes1.body.data.accessToken.split('.');
+      const payload1 = JSON.parse(Buffer.from(tokenParts1[1], 'base64').toString());
+      const sessionId1 = payload1.sessionId;
+
+      // Login 2
+      const loginRes2 = await request(app)
+        .post('/api/v1/auth/login')
+        .send({ email: mockUser.email, password: mockUser.password, deviceName: 'Device B' });
+      const accessToken2 = loginRes2.body.data.accessToken;
+
+      // Revoke Device A using Device B's credentials
+      const revokeRes = await request(app)
+        .delete(`/api/v1/auth/sessions/${sessionId1}`)
+        .set('Authorization', `Bearer ${accessToken2}`);
+
+      expect(revokeRes.status).toBe(200);
+      expect(revokeRes.body.message).toContain('revoked successfully');
+
+      // Verify Device A session is deleted
+      const sessionExists = await redis.exists(`auth:session:${payload1.userId}:${sessionId1}`);
+      expect(sessionExists).toBe(0);
     });
   });
 });

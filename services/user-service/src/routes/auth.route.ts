@@ -19,4 +19,8 @@ router.post('/login', validate(loginSchema), authController.login);
 router.post('/logout', requireAuth, authController.logout);
 router.post('/refresh', validate(refreshTokenSchema), authController.refresh);
 
+// Device/Session Management Routes
+router.get('/sessions', requireAuth, authController.getActiveSessions);
+router.delete('/sessions/:sessionId', requireAuth, authController.revokeSession);
+
 export default router;

@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { AuthService } from '../services/auth.service';
 import { asyncHandler } from '../utils/async-handler';
 import { sendResponse } from '../utils/response';
-import { BadRequestError } from '../utils/errors';
+import { BadRequestError, UnauthorizedError } from '../utils/errors';
 
 const authService = new AuthService();
 
@@ -49,7 +49,14 @@ export const resendOtp = asyncHandler(async (req: Request, res: Response) => {
  * Handles user login.
  */
 export const login = asyncHandler(async (req: Request, res: Response) => {
-  const result = await authService.login(req.body);
+  const clientInfo = {
+    userAgent: req.headers['user-agent'],
+    ipAddress: typeof req.headers['x-forwarded-for'] === 'string'
+      ? req.headers['x-forwarded-for'].split(',')[0].trim()
+      : req.ip || 'Unknown IP',
+  };
+
+  const result = await authService.login(req.body, clientInfo);
   
   // Set refresh token in httpOnly cookie for extra security in addition to returning it
   res.cookie('refreshToken', result.refreshToken, {
@@ -75,11 +82,11 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
  * Handles user logout.
  */
 export const logout = asyncHandler(async (req: Request, res: Response) => {
-  if (!req.user?.sessionId) {
+  if (!req.user?.id || !req.user?.sessionId) {
     throw new BadRequestError('No active session found to logout');
   }
 
-  const result = await authService.logout(req.user.sessionId);
+  const result = await authService.logout(req.user.id, req.user.sessionId);
   
   res.clearCookie('refreshToken');
 
@@ -101,7 +108,14 @@ export const refresh = asyncHandler(async (req: Request, res: Response) => {
     throw new BadRequestError('Refresh token is required');
   }
 
-  const result = await authService.refresh(refreshToken);
+  const clientInfo = {
+    userAgent: req.headers['user-agent'],
+    ipAddress: typeof req.headers['x-forwarded-for'] === 'string'
+      ? req.headers['x-forwarded-for'].split(',')[0].trim()
+      : req.ip || 'Unknown IP',
+  };
+
+  const result = await authService.refresh(refreshToken, clientInfo);
 
   res.cookie('refreshToken', result.refreshToken, {
     httpOnly: true,
@@ -118,5 +132,56 @@ export const refresh = asyncHandler(async (req: Request, res: Response) => {
       accessToken: result.accessToken,
       refreshToken: result.refreshToken,
     },
+  });
+});
+
+/**
+ * Retrieves all active sessions/devices for the logged-in user.
+ */
+export const getActiveSessions = asyncHandler(async (req: Request, res: Response) => {
+  if (!req.user?.id) {
+    throw new UnauthorizedError('User not authenticated');
+  }
+
+  const sessions = await authService.getActiveSessions(req.user.id);
+  
+  // Mark the current session
+  const enrichedSessions = sessions.map(session => ({
+    ...session,
+    isCurrent: session.sessionId === req.user?.sessionId,
+  }));
+
+  return sendResponse({
+    res,
+    statusCode: 200,
+    message: 'Active sessions retrieved successfully',
+    data: enrichedSessions,
+  });
+});
+
+/**
+ * Revokes a specific session/device for the logged-in user.
+ */
+export const revokeSession = asyncHandler(async (req: Request, res: Response) => {
+  if (!req.user?.id) {
+    throw new UnauthorizedError('User not authenticated');
+  }
+
+  const { sessionId } = req.params;
+  if (!sessionId) {
+    throw new BadRequestError('Session ID is required');
+  }
+
+  await authService.revokeSession(req.user.id, sessionId);
+
+  // If the user is revoking their own current session, clear their cookie
+  if (sessionId === req.user.sessionId) {
+    res.clearCookie('refreshToken');
+  }
+
+  return sendResponse({
+    res,
+    statusCode: 200,
+    message: 'Session revoked successfully',
   });
 });

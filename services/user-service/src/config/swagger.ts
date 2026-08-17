@@ -238,6 +238,86 @@ export const swaggerDocument = {
         },
       },
     },
+    '/api/v1/auth/sessions': {
+      get: {
+        summary: 'Get all active sessions/devices for the logged-in user',
+        tags: ['Authentication'],
+        security: [
+          {
+            bearerAuth: [],
+          },
+        ],
+        responses: {
+          '200': {
+            description: 'Active sessions retrieved successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', example: true },
+                    message: { type: 'string', example: 'Active sessions retrieved successfully' },
+                    data: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          sessionId: { type: 'string', example: '8c14f4e6-322b-4f21-90d1-7f222f397e26' },
+                          deviceName: { type: 'string', example: 'Chrome on Linux' },
+                          ipAddress: { type: 'string', example: '127.0.0.1' },
+                          createdAt: { type: 'string', format: 'date-time', example: '2026-08-17T18:19:46.570Z' },
+                          lastActiveAt: { type: 'string', format: 'date-time', example: '2026-08-17T18:19:46.570Z' },
+                          isCurrent: { type: 'boolean', example: true },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          '401': {
+            description: 'Unauthorized (Missing or invalid access token)',
+          },
+        },
+      },
+    },
+    '/api/v1/auth/sessions/{sessionId}': {
+      delete: {
+        summary: 'Revoke (delete) a specific session/device',
+        tags: ['Authentication'],
+        security: [
+          {
+            bearerAuth: [],
+          },
+        ],
+        parameters: [
+          {
+            name: 'sessionId',
+            in: 'path',
+            required: true,
+            description: 'The ID of the session to revoke',
+            schema: {
+              type: 'string',
+            },
+          },
+        ],
+        responses: {
+          '200': {
+            description: 'Session revoked successfully',
+          },
+          '400': {
+            description: 'Missing session ID',
+          },
+          '401': {
+            description: 'Unauthorized (Missing or invalid access token)',
+          },
+          '404': {
+            description: 'Session not found or already expired',
+          },
+        },
+      },
+    },
     '/api/v1/health': {
       get: {
         summary: 'Check API and service health',
@@ -291,6 +371,7 @@ export const swaggerDocument = {
         properties: {
           email: { type: 'string', format: 'email', example: 'jane@example.com' },
           password: { type: 'string', example: 'SecurePassword123' },
+          deviceName: { type: 'string', example: 'My iPhone 14' },
         },
       },
       ApiResponse: {
