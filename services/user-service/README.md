@@ -10,6 +10,7 @@ The **User Service** is the foundational identity and access management (IAM) mi
 * **OTP Verification**: Generating cryptographically secure OTPs, storing SHA-256 hashes in Redis, and emailing plain OTPs to users via the **Resend** API.
 * **Session & Device Management**: Establishing user-prefixed Redis-backed sessions with sliding expirations, automatic device identification via User-Agent strings, and capabilities to list and remotely revoke active sessions/devices.
 * **Refresh Token Rotation**: Enhancing security by issuing one-time-use refresh tokens that rotate on every renewal cycle.
+* **Google Authentication**: Verifying Google-issued identity tokens (JWTs) on the backend to dynamically find/create users and issue secure user-service session/JWT tokens.
 * **API Documentation**: Hosting interactive Swagger UI documentation at `/docs`.
 
 ---
@@ -139,6 +140,25 @@ sequenceDiagram
         API->>API: Generate new rotated Refresh Token
         API-->>Client: 200 OK (Body: New AccessToken, Cookie: New httpOnly RefreshToken)
     end
+
+    %% Google Authentication Flow
+    Note over Client, DB: Google Authentication Flow
+    Client->>API: POST /api/v1/auth/google { idToken, deviceName? }
+    API->>API: Initialize Google OAuth2Client & verify ID token
+    alt Verification fails
+        API-->>Client: 401 Unauthorized
+    else Verification succeeds
+        API->>DB: Find user by email
+        alt User not found
+            API->>DB: Create new User (password & phone = null, emailVerified = true)
+        else User found & unverified
+            API->>DB: Update user status to emailVerified = true
+        end
+        API->>Cache: Store session payload in auth:session:userId:sessionId (TTL 7d)
+        API->>API: Sign JWT Access Token (15m expiry) & Refresh Token (7d expiry)
+        API-->>Client: 200 OK (Body: AccessToken, Cookie: httpOnly RefreshToken)
+    end
+```
 ```
 
 ---
@@ -182,6 +202,7 @@ All endpoints are prefixed with `/api/v1` except for the root-level Swagger docs
 | **POST** | `/verify-otp` | None | `{ email, otp }` | Verifies plain OTP against Redis hash. Deletes key on success. Sets `emailVerified: true` in Postgres. |
 | **POST** | `/resend-otp` | None | `{ email }` | Discards current OTP and dispatches a new one (restricted to a 60-second cooldown). |
 | **POST** | `/login` | None | `{ email, password, deviceName? }` | Authenticates verified user, parses User-Agent/IP, creates Redis session, returns JWT Access Token, and sets secure `httpOnly` `refreshToken` cookie. |
+| **POST** | `/google` | None | `{ idToken, deviceName? }` | Verifies Google ID Token, dynamically finds or registers user (without password/phone), establishes Redis session, returns JWT Access Token, and sets secure `httpOnly` `refreshToken` cookie. |
 | **POST** | `/logout` | Bearer `<accessToken>` | None | Deletes active session from Redis and clears client cookie. |
 | **POST** | `/refresh` | `refreshToken` cookie | `{ refreshToken }` *(optional)* | Issues a new Access Token, updates session activity metadata, and generates a new rotated Refresh Token. |
 | **GET** | `/sessions` | Bearer `<accessToken>` | None | Lists all active sessions/devices for the logged-in user, identifying the current session. |
@@ -218,6 +239,7 @@ JWT_SECRET="your-jwt-secret-key"
 JWT_REFRESH_SECRET="your-jwt-refresh-secret-key"
 RESEND_API_KEY="re_mock_key" # Use real key to test email dispatch
 RESEND_FROM_EMAIL="onboarding@resend.dev"
+GOOGLE_CLIENT_ID="your-google-client-id"
 ```
 
 ### Installation & Run Commands

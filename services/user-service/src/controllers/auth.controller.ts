@@ -185,3 +185,38 @@ export const revokeSession = asyncHandler(async (req: Request, res: Response) =>
     message: 'Session revoked successfully',
   });
 });
+
+/**
+ * Handles user authentication via Google OAuth.
+ */
+export const googleLogin = asyncHandler(async (req: Request, res: Response) => {
+  const { idToken, deviceName } = req.body;
+
+  const clientInfo = {
+    userAgent: req.headers['user-agent'],
+    ipAddress: typeof req.headers['x-forwarded-for'] === 'string'
+      ? req.headers['x-forwarded-for'].split(',')[0].trim()
+      : req.ip || 'Unknown IP',
+  };
+
+  const result = await authService.googleLogin(idToken, clientInfo, deviceName);
+
+  // Set refresh token in httpOnly cookie
+  res.cookie('refreshToken', result.refreshToken, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+  });
+
+  return sendResponse({
+    res,
+    statusCode: 200,
+    message: 'Google login successful',
+    data: {
+      accessToken: result.accessToken,
+      refreshToken: result.refreshToken,
+      user: result.user,
+    },
+  });
+});

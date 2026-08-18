@@ -1,4 +1,6 @@
 import crypto from 'crypto';
+import { OAuth2Client } from 'google-auth-library';
+import { env } from '../config/env';
 import { UserRepository } from '../repository/user.repository';
 import { redis } from '../config/redis';
 import { EmailService } from './email.service';
@@ -221,6 +223,9 @@ export class AuthService {
     }
 
     // 2. Compare password
+    if (!user.password) {
+      throw new UnauthorizedError('Invalid email or password');
+    }
     const isPasswordValid = await comparePassword(password, user.password);
     if (!isPasswordValid) {
       throw new UnauthorizedError('Invalid email or password');
@@ -396,5 +401,106 @@ export class AuthService {
       throw new NotFoundError('Session not found or already expired');
     }
     await redis.del(sessionKey);
+  }
+
+  /**
+   * Authenticates a user via Google OAuth ID Token.
+   */
+  public async googleLogin(
+    idToken: string,
+    clientInfo: { userAgent?: string; ipAddress: string },
+    deviceName?: string
+  ): Promise<{
+    accessToken: string;
+    refreshToken: string;
+    user: { id: string; name: string; email: string; role: string };
+  }> {
+    // 1. Verify Google ID token
+    let payload;
+    try {
+      const googleClient = new OAuth2Client(env.GOOGLE_CLIENT_ID);
+      const ticket = await googleClient.verifyIdToken({
+        idToken,
+        audience: env.GOOGLE_CLIENT_ID,
+      });
+      payload = ticket.getPayload();
+    } catch (error: any) {
+      logger.error('Google token verification failed', { error: error.message });
+      throw new UnauthorizedError(`Google token verification failed: ${error.message}`);
+    }
+
+    if (!payload || !payload.email) {
+      throw new UnauthorizedError('Invalid Google token payload');
+    }
+
+    const { email, name, email_verified } = payload;
+
+    // 2. Find or create user
+    let user = await this.userRepository.findByEmail(email);
+
+    if (!user) {
+      // Create user if they do not exist
+      user = await this.userRepository.create({
+        email,
+        name: name || email.split('@')[0],
+        emailVerified: email_verified || true,
+        emailVerifiedAt: (email_verified || true) ? new Date() : null,
+      });
+      logger.info('Created new user via Google Sign-In', { userId: user.id, email: user.email });
+    } else {
+      // If user exists but is not verified, verify them since Google verified their email
+      if (!user.emailVerified) {
+        user = await this.userRepository.update(user.id, {
+          emailVerified: true,
+          emailVerifiedAt: new Date(),
+        });
+        logger.info('Updated existing user to verified via Google Sign-In', { userId: user.id });
+      }
+    }
+
+    // 3. Establish Session in Redis
+    const sessionId = crypto.randomUUID();
+    const sessionKey = `auth:session:${user.id}:${sessionId}`;
+    
+    // Parse UA to identify device
+    const parsedUa = parseUserAgent(clientInfo.userAgent);
+    const resolvedDeviceName = deviceName || parsedUa.formatted;
+
+    const sessionData = JSON.stringify({
+      userId: user.id,
+      email: user.email,
+      role: user.role,
+      userAgent: clientInfo.userAgent || 'Unknown',
+      ipAddress: clientInfo.ipAddress,
+      deviceName: resolvedDeviceName,
+      createdAt: new Date().toISOString(),
+      lastActiveAt: new Date().toISOString(),
+    });
+
+    await redis.set(sessionKey, sessionData, 'EX', this.SESSION_TTL);
+
+    // 4. Generate Access & Refresh Tokens (JWT)
+    const accessToken = generateAccessToken({
+      userId: user.id,
+      email: user.email,
+      role: user.role,
+      sessionId,
+    });
+
+    const refreshToken = generateRefreshToken({
+      userId: user.id,
+      sessionId,
+    });
+
+    return {
+      accessToken,
+      refreshToken,
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
+    };
   }
 }

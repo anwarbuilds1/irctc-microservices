@@ -6,6 +6,38 @@ import { redis } from '../config/redis';
 import { EmailService } from '../services/email.service';
 import crypto from 'crypto';
 
+vi.mock('google-auth-library', () => {
+  const verifyIdTokenMock = vi.fn().mockImplementation(async ({ idToken }) => {
+    if (idToken === 'valid-google-token') {
+      return {
+        getPayload: () => ({
+          email: 'google-user@example.com',
+          name: 'Google User',
+          email_verified: true,
+          sub: 'google-sub-12345',
+        }),
+      };
+    } else if (idToken === 'unverified-google-token') {
+      return {
+        getPayload: () => ({
+          email: 'google-unverified@example.com',
+          name: 'Google Unverified User',
+          email_verified: false,
+          sub: 'google-sub-67890',
+        }),
+      };
+    } else {
+      throw new Error('Invalid token signature');
+    }
+  });
+
+  return {
+    OAuth2Client: class {
+      verifyIdToken = verifyIdTokenMock;
+    },
+  };
+});
+
 describe('Authentication Flow Integration Tests', () => {
   let sendEmailSpy: any;
 
@@ -506,6 +538,91 @@ describe('Authentication Flow Integration Tests', () => {
       // Verify Device A session is deleted
       const sessionExists = await redis.exists(`auth:session:${payload1.userId}:${sessionId1}`);
       expect(sessionExists).toBe(0);
+    });
+  });
+
+  describe('POST /api/v1/auth/google', () => {
+    it('should successfully authenticate and register a new user using a valid Google ID token', async () => {
+      const response = await request(app)
+        .post('/api/v1/auth/google')
+        .send({
+          idToken: 'valid-google-token',
+          deviceName: 'Google Chrome Web',
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(response.body.message).toBe('Google login successful');
+      expect(response.body.data.accessToken).toBeDefined();
+      expect(response.body.data.refreshToken).toBeDefined();
+      expect(response.body.data.user.email).toBe('google-user@example.com');
+      expect(response.body.data.user.name).toBe('Google User');
+
+      // Verify user created in PostgreSQL
+      const user = await prisma.user.findUnique({ where: { email: 'google-user@example.com' } });
+      expect(user).toBeDefined();
+      expect(user?.emailVerified).toBe(true);
+      expect(user?.password).toBeNull();
+      expect(user?.phone).toBeNull();
+    });
+
+    it('should successfully authenticate an existing user using a valid Google ID token', async () => {
+      // 1. Create a user manually
+      await prisma.user.create({
+        data: {
+          email: 'google-user@example.com',
+          name: 'Google User Old Name',
+          emailVerified: false,
+        },
+      });
+
+      // 2. Perform Google Sign-In
+      const response = await request(app)
+        .post('/api/v1/auth/google')
+        .send({
+          idToken: 'valid-google-token',
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      
+      // Verify user is now verified
+      const user = await prisma.user.findUnique({ where: { email: 'google-user@example.com' } });
+      expect(user?.emailVerified).toBe(true);
+      expect(user?.emailVerifiedAt).not.toBeNull();
+    });
+
+    it('should reject authentication if Google ID token is invalid', async () => {
+      const response = await request(app)
+        .post('/api/v1/auth/google')
+        .send({
+          idToken: 'invalid-token',
+        });
+
+      expect(response.status).toBe(401);
+      expect(response.body.success).toBe(false);
+      expect(response.body.message).toContain('Google token verification failed');
+    });
+
+    it('should reject standard login if a Google-registered user has no password set', async () => {
+      // 1. Sign up with Google to create the user
+      await request(app)
+        .post('/api/v1/auth/google')
+        .send({
+          idToken: 'valid-google-token',
+        });
+
+      // 2. Attempt standard password login
+      const response = await request(app)
+        .post('/api/v1/auth/login')
+        .send({
+          email: 'google-user@example.com',
+          password: 'SomePassword123',
+        });
+
+      expect(response.status).toBe(401);
+      expect(response.body.success).toBe(false);
+      expect(response.body.message).toBe('Invalid email or password');
     });
   });
 });

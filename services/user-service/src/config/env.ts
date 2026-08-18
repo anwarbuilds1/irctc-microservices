@@ -14,6 +14,7 @@ const envSchema = z.object({
   SERVICE_NAME: z.string().default('user-service'),
   RESEND_API_KEY: z.string().optional().default('re_mock_key'),
   RESEND_FROM_EMAIL: z.string().default('onboarding@resend.dev'),
+  GOOGLE_CLIENT_ID: z.string().optional().default('mock-google-client-id'),
 });
 
 const parsedEnv = envSchema.safeParse(process.env);
